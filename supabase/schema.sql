@@ -34,6 +34,7 @@ create table if not exists public.turnos (
   hora time not null,
   motivo text default '',
   avisar boolean not null default true,
+  tipo text check (tipo in ('primera', 'control')),
   created_at timestamptz not null default now()
 );
 
@@ -157,3 +158,199 @@ create policy "paciente ve sus propios turnos" on public.turnos
 --    reemplazalo acá abajo, después ejecutá esta línea sola:
 --
 -- insert into public.staff (id, nombre) values ('PEGAR-UUID-DE-FLORENCIA-ACA', 'Florencia');
+
+-- ============================================================================
+-- Ingresos: valores por mes (primera consulta, control y % de la nutricionista)
+-- ============================================================================
+create table if not exists public.config_ingresos (
+  mes date primary key,
+  valor_consulta numeric not null check (valor_consulta >= 0),
+  valor_control numeric not null check (valor_control >= 0),
+  porcentaje numeric not null check (porcentaje >= 0 and porcentaje <= 100),
+  created_at timestamptz not null default now()
+);
+alter table public.config_ingresos enable row level security;
+create policy "staff accede a config_ingresos" on public.config_ingresos
+  for all using (public.is_staff()) with check (public.is_staff());
+
+-- ============================================================================
+-- Planes de alimentación como archivos (ver agregar_planes_archivos.sql)
+-- ============================================================================
+-- 1) Tabla: un registro por archivo, con la fecha del plan que elige la nutricionista.
+create table if not exists public.planes (
+  id uuid primary key default gen_random_uuid(),
+  paciente_id uuid not null references public.pacientes(id) on delete cascade,
+  fecha date not null,
+  nombre_archivo text not null,
+  ruta text not null,
+  tipo text default '',
+  tamano bigint default 0,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists planes_paciente_idx on public.planes (paciente_id);
+
+alter table public.planes enable row level security;
+
+drop policy if exists "staff accede a todos los planes" on public.planes;
+create policy "staff accede a todos los planes" on public.planes
+  for all using (public.is_staff()) with check (public.is_staff());
+
+drop policy if exists "paciente ve sus propios planes" on public.planes;
+create policy "paciente ve sus propios planes" on public.planes
+  for select using (auth.uid() = paciente_id);
+
+-- 2) Bucket privado para los archivos (máx. 15 MB; PDF, Word, JPG, PNG).
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'planes', 'planes', false, 15728640,
+  array[
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'image/jpeg',
+    'image/png'
+  ]
+)
+on conflict (id) do update
+  set public = false,
+      file_size_limit = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
+
+-- 3) Permisos sobre los archivos: la nutricionista sube, ve y borra todo;
+--    cada paciente solo puede descargar lo que está en su propia carpeta.
+drop policy if exists "staff gestiona archivos de planes" on storage.objects;
+create policy "staff gestiona archivos de planes" on storage.objects
+  for all using (bucket_id = 'planes' and public.is_staff())
+  with check (bucket_id = 'planes' and public.is_staff());
+
+drop policy if exists "paciente descarga sus planes" on storage.objects;
+create policy "paciente descarga sus planes" on storage.objects
+  for select using (
+    bucket_id = 'planes' and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+-- ============================================================================
+-- Reportes de mediciones compartidos con el paciente (ver agregar_reportes_mediciones.sql)
+-- ============================================================================
+
+-- Cada fila es una comparación entre dos mediciones que la nutricionista decidió
+-- compartir. Se guarda una "foto" de las dos mediciones (datos), así el paciente
+-- ve exactamente lo que ella autorizó aunque después edite esas mediciones.
+create table if not exists public.reportes_mediciones (
+  id uuid primary key default gen_random_uuid(),
+  paciente_id uuid not null references public.pacientes(id) on delete cascade,
+  fecha_a date not null,
+  fecha_b date not null,
+  datos jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists reportes_mediciones_paciente_idx on public.reportes_mediciones (paciente_id);
+
+alter table public.reportes_mediciones enable row level security;
+
+-- La nutricionista crea, ve y borra todo.
+drop policy if exists "staff accede a todos los reportes" on public.reportes_mediciones;
+create policy "staff accede a todos los reportes" on public.reportes_mediciones
+  for all using (public.is_staff()) with check (public.is_staff());
+
+-- El paciente solo puede VER los suyos (no puede crearlos ni modificarlos).
+drop policy if exists "paciente ve sus propios reportes" on public.reportes_mediciones;
+create policy "paciente ve sus propios reportes" on public.reportes_mediciones
+  for select using (auth.uid() = paciente_id);
+
+-- ============================================================================
+-- Consultas realizadas (primera consulta o control) — base del reporte de ingresos
+-- (ver agregar_consultas.sql)
+-- ============================================================================
+
+-- Una fila por consulta realizada. Máximo una por paciente y por día.
+create table if not exists public.consultas (
+  id uuid primary key default gen_random_uuid(),
+  paciente_id uuid not null references public.pacientes(id) on delete cascade,
+  fecha date not null,
+  tipo text not null check (tipo in ('primera', 'control')),
+  created_at timestamptz not null default now(),
+  unique (paciente_id, fecha)
+);
+
+create index if not exists consultas_paciente_idx on public.consultas (paciente_id);
+create index if not exists consultas_fecha_idx on public.consultas (fecha);
+
+alter table public.consultas enable row level security;
+
+-- Solo la nutricionista (staff) ve y edita esto; los pacientes no tienen acceso.
+drop policy if exists "staff accede a consultas" on public.consultas;
+create policy "staff accede a consultas" on public.consultas
+  for all using (public.is_staff()) with check (public.is_staff());
+
+-- ============================================================================
+-- Mediciones compartidas con el paciente (ver agregar_mediciones_compartidas.sql)
+-- ============================================================================
+create table if not exists public.mediciones_compartidas (
+  paciente_id uuid primary key references public.pacientes(id) on delete cascade,
+  datos jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.mediciones_compartidas enable row level security;
+
+-- La nutricionista crea, actualiza, ve y borra todo.
+drop policy if exists "staff accede a mediciones compartidas" on public.mediciones_compartidas;
+create policy "staff accede a mediciones compartidas" on public.mediciones_compartidas
+  for all using (public.is_staff()) with check (public.is_staff());
+
+-- El paciente solo puede VER lo suyo (no crear ni modificar).
+drop policy if exists "paciente ve sus mediciones compartidas" on public.mediciones_compartidas;
+create policy "paciente ve sus mediciones compartidas" on public.mediciones_compartidas
+  for select using (auth.uid() = paciente_id);
+
+-- ============================================================================
+-- Confidencialidad: datos clínicos solo para la nutricionista (ver proteger_datos_clinicos.sql)
+-- ============================================================================
+create table if not exists public.datos_clinicos (
+  paciente_id uuid primary key references public.pacientes(id) on delete cascade,
+  medidas jsonb not null default '[]'::jsonb,
+  historia_clinica text not null default ''
+);
+
+alter table public.datos_clinicos enable row level security;
+
+drop policy if exists "staff accede a datos clinicos" on public.datos_clinicos;
+create policy "staff accede a datos clinicos" on public.datos_clinicos
+  for all using (public.is_staff()) with check (public.is_staff());
+-- (sin política para pacientes: no pueden ver ni una fila)
+
+-- Migración: copiar lo existente y vaciar las columnas legibles por el paciente.
+insert into public.datos_clinicos (paciente_id, medidas, historia_clinica)
+select id, coalesce(medidas, '[]'::jsonb), coalesce(historia_clinica, '')
+from public.pacientes
+on conflict (paciente_id) do nothing;
+
+update public.pacientes p
+set medidas = '[]'::jsonb, historia_clinica = ''
+where exists (select 1 from public.datos_clinicos d where d.paciente_id = p.id)
+  and (p.medidas <> '[]'::jsonb or p.historia_clinica <> '');
+
+-- Un paciente solo puede cambiar "log" e "history" de su propia fila.
+create or replace function public.proteger_ficha_paciente()
+returns trigger
+language plpgsql
+as $$
+begin
+  if current_user = 'authenticated' and not public.is_staff() then
+    if (new.id, new.nombre, new.iniciales, new.genero, new.email, new.acceso, new.plan, new.medidas, new.historia_clinica, new.created_at)
+       is distinct from
+       (old.id, old.nombre, old.iniciales, old.genero, old.email, old.acceso, old.plan, old.medidas, old.historia_clinica, old.created_at) then
+      raise exception 'Un paciente solo puede modificar su registro diario';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists proteger_ficha_paciente on public.pacientes;
+create trigger proteger_ficha_paciente
+  before update on public.pacientes
+  for each row execute procedure public.proteger_ficha_paciente();

@@ -154,11 +154,11 @@ export default function GestionAccesos({ patients, onInvitar, onToggleEstado, on
                     {a.name}
                   </div>
                 </td>
-                <td>{a.email}</td>
-                <td>
+                <td data-label="Email">{a.email}</td>
+                <td data-label="Estado">
                   <span className={'estado-badge ' + a.acceso}>{ESTADO_LABEL[a.acceso]}</span>
                 </td>
-                <td>
+                <td data-label="Acciones">
                   <div className="row-actions">
                     {a.acceso !== 'invitado' && (
                       <button className="btn-sm danger" onClick={() => pedirConfirmacionEstado(key, a)}>

@@ -15,8 +15,9 @@ export const DET_DAY_LABELS = {
 };
 export const DAY_LETTERS = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
 
-// "Hoy" en la maqueta es siempre miércoles 27 de agosto de 2026.
-export const TODAY = { year: 2026, month: 7, day: 27 }; // month: 0 = enero
+// "Hoy": la fecha real del momento en que se abre la app (hora de la computadora/celular).
+const _ahora = new Date();
+export const TODAY = { year: _ahora.getFullYear(), month: _ahora.getMonth(), day: _ahora.getDate() }; // month: 0 = enero
 export const MONTH_NAMES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
@@ -30,6 +31,40 @@ export function daysInMonth(year, month) {
 }
 export function firstWeekdayMonday(year, month) {
   return (new Date(year, month, 1).getDay() + 6) % 7;
+}
+
+// Campos de cada medición. Todos son obligatorios al cargar una medición nueva.
+// Para sumar un campo, agregalo acá (con obligatorio: true si hay que pedirlo siempre):
+// aparece solo en el formulario y en las tablas (de la nutricionista y del paciente).
+export const MEDIDA_CAMPOS = [
+  { key: 'peso', label: 'Peso (kg)', decimales: 1, obligatorio: true, min: 20, max: 400 },
+  { key: 'cintura', label: 'Cintura (cm)', obligatorio: true, min: 30, max: 250 },
+  { key: 'cadera', label: 'Cadera (cm)', obligatorio: true, min: 30, max: 250 },
+  { key: 'grasa', label: 'Grasa corporal (%)', decimales: 1, obligatorio: true, min: 1, max: 80 },
+  { key: 'musculo', label: 'Masa muscular (kg)', decimales: 1, obligatorio: true, min: 5, max: 200 },
+];
+
+// Convierte lo que se escribió en un campo de medición a número. Acepta coma o punto
+// como separador decimal ("77,5" y "77.5" dan 77.5). Devuelve NaN si no es un número válido
+// (por ejemplo "1.234,5" o letras), para no guardar nunca un valor mal interpretado.
+export function parseDecimal(texto) {
+  const t = String(texto ?? '').trim().replace(',', '.');
+  if (!/^\d+(\.\d+)?$/.test(t)) return NaN;
+  return Number(t);
+}
+
+const tieneValor = (v) => v !== undefined && v !== null && v !== '';
+
+// Columnas a mostrar en una tabla: siempre peso y cintura; los demás solo si
+// al menos una medición los cargó (así la tabla no se llena de columnas vacías).
+export function columnasMedidas(medidas) {
+  return MEDIDA_CAMPOS.filter((c) => c.obligatorio || (medidas || []).some((m) => tieneValor(m[c.key])));
+}
+
+export function formatMedida(campo, valor) {
+  if (!tieneValor(valor)) return '—';
+  const n = Number(valor);
+  return campo.decimales ? n.toFixed(campo.decimales) : String(n);
 }
 
 // Mediciones corporales: cargadas por consulta, visibles para la nutricionista y el paciente.
@@ -217,7 +252,7 @@ export function statusOf(p) {
 
 export function registroDelDia(p, dayIndex) {
   const day = DET_DATES[dayIndex];
-  if (day === 27) {
+  if (dayIndex === 2) { // índice 2 = "hoy" en la vista del paciente
     const reg = {};
     MEAL_ORDER.forEach((k) => { reg[k] = p.log[k]; });
     return reg;
@@ -229,7 +264,7 @@ export function registroDelDia(p, dayIndex) {
 }
 
 export function statusForDay(p, day) {
-  const h = day === 27
+  const h = day === TODAY.day
     ? Object.fromEntries(MEAL_ORDER.filter((k) => p.log[k]).map((k) => [k, p.log[k].txt]))
     : (p.history[day] || {});
   const filled = MEAL_ORDER.filter((k) => h[k]).length;

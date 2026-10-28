@@ -53,7 +53,9 @@ export default function Header({ subtitle, onLogout, onBack }) {
             <span className="ic">🏠</span> Inicio
           </button>
         )}
-        <button className="btn-ghost" onClick={abrirCambioPassword}>🔒 Cambiar contraseña</button>
+        <button className="btn-ghost" onClick={abrirCambioPassword} title="Cambiar contraseña" aria-label="Cambiar contraseña">
+          🔒<span className="hide-sm"> Cambiar contraseña</span>
+        </button>
         {onLogout && (
           <button className="btn-ghost" onClick={onLogout}>Cerrar sesión</button>
         )}

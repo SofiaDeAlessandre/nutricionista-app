@@ -29,7 +29,7 @@ function buildMiniCalendarCells({ year, month, turnos, selectedFecha, onSelect }
   return cells;
 }
 
-export default function Mosaico({ patients, onOpenPatient, onOpenAccesos }) {
+export default function Mosaico({ patients, onOpenPatient, onOpenAccesos, onOpenIngresos }) {
   const [query, setQuery] = useState('');
   const [calYear, setCalYear] = useState(TODAY.year);
   const [calMonth, setCalMonth] = useState(TODAY.month);
@@ -70,9 +70,14 @@ export default function Mosaico({ patients, onOpenPatient, onOpenAccesos }) {
           <h1>Hola, <span style={{ color: 'var(--pink)' }}>Florencia</span></h1>
           <p className="sub">{entries.length} pacientes activos hoy</p>
         </div>
-        <button className="pill-btn" onClick={onOpenAccesos}>
-          <span className="ic">👥</span> Gestionar accesos
-        </button>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="pill-btn" onClick={onOpenIngresos}>
+            <span className="ic">💰</span> Ingresos
+          </button>
+          <button className="pill-btn" onClick={onOpenAccesos}>
+            <span className="ic">👥</span> Gestionar accesos
+          </button>
+        </div>
       </div>
 
       <div className="mosaico-layout">

@@ -6,10 +6,13 @@ import Mosaico from './components/Mosaico.jsx';
 import PatientDetail from './components/PatientDetail.jsx';
 import PatientDashboard from './components/PatientDashboard.jsx';
 import GestionAccesos from './components/GestionAccesos.jsx';
+import Ingresos from './components/Ingresos.jsx';
 import { supabase } from './lib/supabaseClient.js';
 import {
   checkIsStaff, fetchAllPacientes, fetchOwnPaciente,
   persistPaciente, addTurno, deleteTurno, updateTurno, crearPacienteConClave, eliminarPaciente,
+  fetchConfigIngresos, saveConfigIngresos, subirPlan, eliminarPlan, borrarArchivosDePlanes,
+  compartirReporte, quitarReporte, compartirMediciones, quitarMedicionesCompartidas, addConsulta, updateConsulta, deleteConsulta,
 } from './lib/api.js';
 
 // Si venimos del link del mail (invitación o recuperación de contraseña),
@@ -30,6 +33,9 @@ export default function App() {
   const [openPatient, setOpenPatient] = useState(null);
   const [patientView, setPatientView] = useState('hoy');
   const [showAccesos, setShowAccesos] = useState(false);
+  const [showIngresos, setShowIngresos] = useState(false);
+  const [configIngresos, setConfigIngresos] = useState([]);
+  const [ingresosError, setIngresosError] = useState('');
 
   // Mientras estamos en la pantalla de "elegir tu contraseña" no queremos que
   // el listener de auth nos empuje adentro de la app todavía. Usamos un ref
@@ -43,6 +49,16 @@ export default function App() {
       setRole(isStaff ? 'staff' : 'paciente');
       const dict = isStaff ? await fetchAllPacientes() : await fetchOwnPaciente(sess.user.id);
       setPatients(dict);
+      if (isStaff) {
+        // Se carga aparte: si todavía no se corrió el SQL de ingresos, el resto de la app anda igual.
+        try {
+          setConfigIngresos(await fetchConfigIngresos());
+          setIngresosError('');
+        } catch (errCfg) {
+          console.error(errCfg);
+          setIngresosError('No se pudo cargar la configuración de ingresos (¿ya corriste el SQL en Supabase?).');
+        }
+      }
     } catch (err) {
       console.error(err);
       setLoadError('No se pudieron cargar los datos. Revisá tu conexión y volvé a intentar.');
@@ -87,6 +103,7 @@ export default function App() {
     setOpenPatient(null);
     setPatientView('hoy');
     setShowAccesos(false);
+    setShowIngresos(false);
   }
 
   async function handleConfirmed() {
@@ -126,6 +143,7 @@ export default function App() {
   }
 
   async function handleEliminarPaciente(key) {
+    await borrarArchivosDePlanes((patients[key]?.planes || []).map((pl) => pl.ruta));
     await eliminarPaciente(key);
     setPatients((prev) => {
       const next = { ...prev };
@@ -137,7 +155,7 @@ export default function App() {
   async function handleAddTurno(key, turno) {
     try {
       const fila = await addTurno(key, turno);
-      const nuevo = { id: fila.id, fecha: fila.fecha, hora: (fila.hora || '').slice(0, 5), motivo: fila.motivo || '', avisar: fila.avisar };
+      const nuevo = { id: fila.id, fecha: fila.fecha, hora: (fila.hora || '').slice(0, 5), motivo: fila.motivo || '', avisar: fila.avisar, tipo: fila.tipo || null };
       setPatients((prev) => {
         const cur = prev[key];
         if (!cur) return prev;
@@ -165,6 +183,102 @@ export default function App() {
       console.error(err);
       window.alert('No se pudo modificar el turno. Probá de nuevo.');
     }
+  }
+
+  async function handleGuardarConfigIngresos(cfg) {
+    await saveConfigIngresos(cfg);
+    setConfigIngresos(await fetchConfigIngresos());
+  }
+
+  // Planes de alimentación (archivos). Tiran el error para que la pantalla muestre su aviso.
+  async function handleSubirPlan(key, archivo, fecha) {
+    const fila = await subirPlan(key, archivo, fecha);
+    const nuevo = { id: fila.id, fecha: fila.fecha, nombre: fila.nombre_archivo, ruta: fila.ruta, tamano: fila.tamano, creado: fila.created_at };
+    setPatients((prev) => {
+      const cur = prev[key];
+      if (!cur) return prev;
+      const planes = [...(cur.planes || []), nuevo].sort((a, b) => (b.fecha + b.creado).localeCompare(a.fecha + a.creado));
+      return { ...prev, [key]: { ...cur, planes } };
+    });
+  }
+
+  async function handleEliminarPlan(key, plan) {
+    await eliminarPlan(plan);
+    setPatients((prev) => {
+      const cur = prev[key];
+      if (!cur) return prev;
+      return { ...prev, [key]: { ...cur, planes: (cur.planes || []).filter((pl) => pl.id !== plan.id) } };
+    });
+  }
+
+  // Consultas realizadas (primera consulta / control). Tiran el error para que la pantalla lo muestre.
+  const ordenarConsultas = (lista) => [...lista].sort((a, b) => b.fecha.localeCompare(a.fecha));
+
+  async function handleAddConsulta(key, datos) {
+    const fila = await addConsulta(key, datos);
+    setPatients((prev) => {
+      const cur = prev[key];
+      if (!cur) return prev;
+      return { ...prev, [key]: { ...cur, consultas: ordenarConsultas([...(cur.consultas || []), { id: fila.id, fecha: fila.fecha, tipo: fila.tipo }]) } };
+    });
+  }
+
+  async function handleUpdateConsulta(key, id, datos) {
+    await updateConsulta(id, datos);
+    setPatients((prev) => {
+      const cur = prev[key];
+      if (!cur) return prev;
+      return { ...prev, [key]: { ...cur, consultas: ordenarConsultas((cur.consultas || []).map((c) => (c.id === id ? { ...c, ...datos } : c))) } };
+    });
+  }
+
+  async function handleDeleteConsulta(key, id) {
+    await deleteConsulta(id);
+    setPatients((prev) => {
+      const cur = prev[key];
+      if (!cur) return prev;
+      return { ...prev, [key]: { ...cur, consultas: (cur.consultas || []).filter((c) => c.id !== id) } };
+    });
+  }
+
+  // Reportes de mediciones compartidos con el paciente.
+  async function handleCompartirReporte(key, medicionA, medicionB) {
+    const fila = await compartirReporte(key, medicionA, medicionB);
+    const nuevo = { id: fila.id, fechaA: fila.fecha_a, fechaB: fila.fecha_b, a: fila.datos?.a, b: fila.datos?.b, creado: fila.created_at };
+    setPatients((prev) => {
+      const cur = prev[key];
+      if (!cur) return prev;
+      return { ...prev, [key]: { ...cur, reportes: [nuevo, ...(cur.reportes || [])] } };
+    });
+  }
+
+  // Mediciones completas autorizadas para el paciente.
+  async function handleCompartirMediciones(key) {
+    const cur = patients[key];
+    const fila = await compartirMediciones(key, cur.medidas || []);
+    setPatients((prev) => {
+      const p = prev[key];
+      if (!p) return prev;
+      return { ...prev, [key]: { ...p, compartidas: { datos: fila.datos || [], actualizado: fila.updated_at } } };
+    });
+  }
+
+  async function handleQuitarMediciones(key) {
+    await quitarMedicionesCompartidas(key);
+    setPatients((prev) => {
+      const p = prev[key];
+      if (!p) return prev;
+      return { ...prev, [key]: { ...p, compartidas: null } };
+    });
+  }
+
+  async function handleQuitarReporte(key, reporteId) {
+    await quitarReporte(reporteId);
+    setPatients((prev) => {
+      const cur = prev[key];
+      if (!cur) return prev;
+      return { ...prev, [key]: { ...cur, reportes: (cur.reportes || []).filter((r) => r.id !== reporteId) } };
+    });
   }
 
   async function handleCancelTurno(key, fecha, hora) {
@@ -230,15 +344,23 @@ export default function App() {
         subtitle="Vista nutricionista"
         onLogout={handleLogout}
         onBack={
-          openPatient || showAccesos
+          openPatient || showAccesos || showIngresos
             ? () => {
                 setOpenPatient(null);
                 setShowAccesos(false);
+                setShowIngresos(false);
               }
             : undefined
         }
       />
-      {showAccesos ? (
+      {showIngresos ? (
+        <Ingresos
+          patients={patients}
+          config={configIngresos}
+          loadError={ingresosError}
+          onGuardarConfig={handleGuardarConfigIngresos}
+        />
+      ) : showAccesos ? (
         <GestionAccesos
           patients={patients}
           onInvitar={addPatient}
@@ -253,9 +375,18 @@ export default function App() {
           onAddTurno={handleAddTurno}
           onUpdateTurno={handleUpdateTurno}
           onCancelTurno={handleCancelTurno}
+          onSubirPlan={handleSubirPlan}
+          onEliminarPlan={handleEliminarPlan}
+          onCompartirReporte={handleCompartirReporte}
+          onAddConsulta={handleAddConsulta}
+          onUpdateConsulta={handleUpdateConsulta}
+          onDeleteConsulta={handleDeleteConsulta}
+          onQuitarReporte={handleQuitarReporte}
+          onCompartirMediciones={handleCompartirMediciones}
+          onQuitarMediciones={handleQuitarMediciones}
         />
       ) : (
-        <Mosaico patients={patients} onOpenPatient={setOpenPatient} onOpenAccesos={() => setShowAccesos(true)} />
+        <Mosaico patients={patients} onOpenPatient={setOpenPatient} onOpenAccesos={() => setShowAccesos(true)} onOpenIngresos={() => setShowIngresos(true)} />
       )}
     </>
   );

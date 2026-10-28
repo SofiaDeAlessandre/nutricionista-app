@@ -1,7 +1,11 @@
 import { useState } from 'react';
+import PlanesLista from './PlanesLista.jsx';
+import ComparacionTabla from './ComparacionTabla.jsx';
+import { fechaLarga } from '../lib/format.js';
 import {
   MEAL_ORDER, MEAL_LABELS, registroDelDia, statusForDay, fechaKey,
   TODAY, MONTH_NAMES, DAY_LETTERS, daysInMonth, firstWeekdayMonday,
+  columnasMedidas, formatMedida,
 } from '../data/patients.js';
 
 const ICONS = { desayuno: '☀️', colacion: '🍎', almuerzo: '🍽️', merienda: '🍪', cena: '🌙' };
@@ -103,7 +107,9 @@ export default function PatientDashboard({ view, onChangeView, patient, onUpdate
       <div className="patient-nav">
         <button className={view === 'hoy' ? 'active' : ''} onClick={() => onChangeView('hoy')}>Hoy</button>
         <button className={view === 'calendario' ? 'active' : ''} onClick={irACalendario}>Calendario</button>
+        <button className={view === 'plan' ? 'active' : ''} onClick={() => onChangeView('plan')}>Mi plan</button>
         <button className={view === 'medidas' ? 'active' : ''} onClick={() => onChangeView('medidas')}>Mediciones</button>
+        <button className={view === 'reporte' ? 'active' : ''} onClick={() => onChangeView('reporte')}>Reporte de mediciones</button>
       </div>
 
       {view === 'hoy' && (
@@ -200,24 +206,58 @@ export default function PatientDashboard({ view, onChangeView, patient, onUpdate
         </div>
       )}
 
+      {view === 'plan' && (
+        <div className="plan-box">
+          <h4>Tu plan de alimentación</h4>
+          <p className="turnos-sub" style={{ marginBottom: 18 }}>Descargá el archivo que te armó tu nutricionista.</p>
+          <PlanesLista planes={patient.planes || []} vacio="Todavía no tenés un plan cargado. Tu nutricionista lo va a subir acá." />
+        </div>
+      )}
+
+      {view === 'reporte' && (
+        <div className="plan-box" style={{ maxWidth: 900 }}>
+          <h4>Reporte de mediciones</h4>
+          <p className="turnos-sub" style={{ marginBottom: 18 }}>
+            Acá aparecen las comparaciones entre mediciones que tu nutricionista decidió compartir con vos.
+          </p>
+          {(patient.reportes || []).length > 0 ? (
+            (patient.reportes || []).map((r) => (
+              <div key={r.id} className="reporte-item">
+                <p className="reporte-compartido">Compartido el {fechaLarga((r.creado || '').slice(0, 10))}</p>
+                {r.a && r.b && <ComparacionTabla a={r.a} b={r.b} />}
+              </div>
+            ))
+          ) : (
+            <p className="turno-empty">
+              Todavía no hay reportes. Si querés ver cómo evolucionaron tus mediciones, pedíselo a tu nutricionista.
+            </p>
+          )}
+        </div>
+      )}
+
       {view === 'medidas' && (
         <div className="medidas-box">
           {patient.medidas.length > 0 ? (
             <table className="medidas-table">
-              <thead><tr><th>Fecha</th><th>Peso (kg)</th><th>Cintura (cm)</th><th>Notas</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  {columnasMedidas(patient.medidas).map((c) => <th key={c.key}>{c.label}</th>)}
+                  <th>Notas</th>
+                </tr>
+              </thead>
               <tbody>
                 {patient.medidas.map((m) => (
                   <tr key={m.fecha}>
                     <td>{new Date(m.fecha + 'T00:00:00').toLocaleDateString('es-AR')}</td>
-                    <td>{m.peso.toFixed(1)}</td>
-                    <td>{m.cintura}</td>
-                    <td>{m.notas}</td>
+                    {columnasMedidas(patient.medidas).map((c) => <td key={c.key} data-label={c.label}>{formatMedida(c, m[c.key])}</td>)}
+                    <td data-label="Notas">{m.notas}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           ) : (
-            <p className="empty-day">Todavía no tenés mediciones cargadas.</p>
+            <p className="empty-day">Tu nutricionista todavía no compartió tus mediciones. Si querés verlas, pedíselas en tu próxima consulta.</p>
           )}
         </div>
       )}
